@@ -1,4 +1,4 @@
-// TASR BharatNext Fuel Manager — Service Worker v3.1
+/ TASR BharatNext Fuel Manager — Service Worker v3.1
 // Minimal, foolproof: NO pre-cache (which was breaking fresh installs).
 // Caches resources only as they're fetched. HTML always network-first.
  
