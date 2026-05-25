@@ -245,37 +245,29 @@ table tbody tr:hover{background:var(--surface)}
 .sticky-table thead th.sorted .sort-arr{opacity:1;color:var(--accent-dark)}
 .sticky-table tbody tr:hover td{background:var(--surface)}
  
-/* Sticky-1 = Time column (always present) */
+/* Sticky-1 = Vehicle column (frozen on horizontal scroll). Only column frozen. */
 .sticky-table .sticky-1{
   position:sticky;left:0;z-index:3;
-  min-width:95px;max-width:95px;
-}
-/* Sticky-2 = Manager column (when shown — owner view) */
-.sticky-table .sticky-2{
-  position:sticky;left:95px;z-index:3;
-  min-width:80px;max-width:80px;
-}
-/* Sticky-3 = Vehicle column (owner view, 3rd frozen) */
-.sticky-table .sticky-3{
-  position:sticky;left:175px;z-index:3;
-  min-width:110px;max-width:110px;
+  min-width:120px;max-width:140px;
   box-shadow:2px 0 4px rgba(0,0,0,.08);
+  font-weight:600;
 }
-/* Sticky-2-last = Vehicle column when Manager hidden (manager view) */
-.sticky-table .sticky-2-last{
-  position:sticky;left:95px;z-index:3;
-  min-width:110px;max-width:110px;
-  box-shadow:2px 0 4px rgba(0,0,0,.08);
+/* Frozen col remains visible on hover */
+.sticky-table tbody tr:hover .sticky-1{background:var(--surface)}
+.sticky-table thead .sticky-1{background:var(--surface-2)}
+ 
+/* ===== REFERENCE CARD on New Entry form — shows last fill of selected vehicle ===== */
+.ref-card{
+  background:linear-gradient(to right, #ecfeff, #f0f9ff);
+  border:1px solid #a5f3fc;border-left:3px solid var(--accent);
+  border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:14px;
 }
-/* Frozen cols must remain visible on hover */
-.sticky-table tbody tr:hover .sticky-1,
-.sticky-table tbody tr:hover .sticky-2,
-.sticky-table tbody tr:hover .sticky-3,
-.sticky-table tbody tr:hover .sticky-2-last{background:var(--surface)}
-.sticky-table thead .sticky-1,
-.sticky-table thead .sticky-2,
-.sticky-table thead .sticky-3,
-.sticky-table thead .sticky-2-last{background:var(--surface-2)}
+.ref-card.empty{background:var(--surface);border-color:var(--border);border-left-color:var(--text-soft)}
+.ref-card-title{font-size:12px;font-weight:600;color:var(--accent-dark);margin-bottom:4px}
+.ref-card.empty .ref-card-title{color:var(--text-muted)}
+.ref-card-meta{font-size:11px;color:var(--text-muted);margin-bottom:6px}
+.ref-card-data{display:flex;gap:14px;flex-wrap:wrap;font-size:12px}
+.ref-card-data .lbl{color:var(--text-muted);font-size:10px;margin-right:2px}
  
 /* ===== VIEW TOGGLE PILLS (Table / Cards) ===== */
 .view-toggle{
@@ -535,10 +527,10 @@ body.lightbg .admin-btn{
       <button class="calc-btn eq" data-k="=">=</button>
     </div>
   </div>
-  <!-- v2.5 indicator: tiny dot bottom-center. Visible when user taps any button (briefly). -->
+  <!-- v2.6 indicator: tiny dot bottom-center. Visible when user taps any button (briefly). -->
   <div style="position:absolute;bottom:6px;left:0;right:0;text-align:center;pointer-events:none;font-size:9px;color:#555;letter-spacing:1px">
     <span id="calc-debug" style="display:inline-block;min-width:8px;color:#888"></span>
-    <span style="opacity:.35;margin-left:6px">v2.5</span>
+    <span style="opacity:.35;margin-left:6px">v2.6</span>
   </div>
 </div>
  
@@ -580,7 +572,7 @@ body.lightbg .admin-btn{
 <!-- ==================== DASHBOARD SCREEN ==================== -->
 <div id="dash-screen" class="screen">
   <div class="topbar">
-    <div class="brand">TASR <span class="accent">BharatNext</span> <span style="font-size:10px;color:var(--text-soft);font-weight:500">v2.5</span></div>
+    <div class="brand">TASR <span class="accent">BharatNext</span> <span style="font-size:10px;color:var(--text-soft);font-weight:500">v2.6</span></div>
     <span id="sync-pill" class="sync-pill sync-online"><span class="dot"></span><span id="sync-text">Online</span></span>
     <div class="topbar-spacer"></div>
     <div class="who"><b id="who-name">—</b><span id="who-role">—</span></div>
@@ -900,7 +892,7 @@ function handleCalcInput(e){
     handleCalcInput(e);
   }, evt === 'touchstart' ? { passive: true } : false);
 });
-console.log('[TASR Fuel v2.5] Calc input handlers attached at document level (click + pointerup + touchstart)');
+console.log('[TASR Fuel v2.6] Calc input handlers attached at document level (click + pointerup + touchstart)');
  
 // keyboard support
 document.addEventListener('keydown', e=>{
@@ -1641,58 +1633,107 @@ function calcAvg(entry, mode){
   return { value, formatted: value.toFixed(2)+' '+unit, meaningful: true, mode, span: between.length };
 }
  
-// Manual Consumption — auto-derived from "angul naap" (vehicle dipstick) stock readings.
-// Stock is measured PRE-FILL (dipstick before adding fuel). Formula:
-//   consumed = prev.stock + prev.qty − cur.stock
-// Then convert to km/L or L/hr using the HMR/km gap.
-// Returns { value, formatted, ... } on success OR { reason } when it can't compute,
-// so the UI can show WHY the value is missing.
-function calcManualConsumption(entry){
+// PARTIAL CONSUMPTION — between last partial fill and current fill.
+//   consumed = last_partial.stock + sum(fills from last_partial inclusive to current exclusive) − cur.stock
+//   Vehicle: km/L = (cur.hmr − last_partial.hmr) / consumed
+//   Machine: L/hr = consumed / (cur.hmr − last_partial.hmr)
+function calcPartialConsumption(entry){
   const veh = state.vehicles.find(v => v.id === entry.vehicle_id);
   if(!veh) return { reason: 'Vehicle not found in master list' };
   const isMachine = veh.type === 'machine';
   const unit = isMachine ? 'L/hr' : 'km/L';
   const t = new Date(entry.fill_time || entry.created_at).getTime();
-  const prev = state.entries
-    .filter(e => e.vehicle_id === entry.vehicle_id && e.id !== entry.id)
+  // Last partial fill of same vehicle (strictly before current)
+  const lastPartial = state.entries
+    .filter(e => e.vehicle_id === entry.vehicle_id && e.id !== entry.id && e.fill_type === 'not_full')
     .filter(e => new Date(e.fill_time || e.created_at).getTime() < t)
     .sort((a,b) => new Date(b.fill_time||b.created_at) - new Date(a.fill_time||a.created_at))[0];
-  if(!prev) return { reason: 'First entry for this vehicle — no previous fill to compare against' };
- 
-  const prevStock = parseFloat(prev.stock);
-  if(isNaN(prevStock)) return { reason: 'Previous entry has no Vehicle Stock (Angul Naap) reading' };
-  const prevQty   = parseFloat(prev.quantity);
-  if(isNaN(prevQty)) return { reason: 'Previous entry has no Quantity' };
-  const curStock  = parseFloat(entry.stock);
-  if(isNaN(curStock)) return { reason: 'This entry has no Vehicle Stock (Angul Naap) reading' };
- 
-  const consumed = (prevStock + prevQty) - curStock;
-  if(consumed <= 0) return { reason: `Stock readings inconsistent — computed consumption is ${consumed.toFixed(1)} L (current stock cannot exceed prev stock + prev fill)` };
- 
-  const prevHmr = parseFloat(prev.hmr);
-  if(isNaN(prevHmr)) return { reason: 'Previous entry has no HMR/KM reading' };
-  const curHmr  = parseFloat(entry.hmr);
-  if(isNaN(curHmr)) return { reason: 'This entry has no HMR/KM reading' };
- 
-  const delta = curHmr - prevHmr;
-  if(delta <= 0) return { reason: `HMR/KM did not increase (Δ ${delta}) — check readings` };
- 
+  if(!lastPartial) return { reason: 'No previous partial (Not Full) fill of this vehicle' };
+  const lpStock = parseFloat(lastPartial.stock);
+  if(isNaN(lpStock)) return { reason: 'Last partial fill has no Vehicle Stock' };
+  const curStock = parseFloat(entry.stock);
+  if(isNaN(curStock)) return { reason: 'This entry has no Vehicle Stock' };
+  // Sum fills from last_partial INCLUSIVE to current EXCLUSIVE
+  const lpT = new Date(lastPartial.fill_time||lastPartial.created_at).getTime();
+  const sumFills = state.entries
+    .filter(e => e.vehicle_id === entry.vehicle_id)
+    .filter(e => {
+      const et = new Date(e.fill_time||e.created_at).getTime();
+      return et >= lpT && et < t;
+    })
+    .reduce((s,e) => s + (parseFloat(e.quantity)||0), 0);
+  const consumed = lpStock + sumFills - curStock;
+  if(consumed <= 0) return { reason: `Stock readings inconsistent — consumed ${consumed.toFixed(1)} L` };
+  const lpHmr = parseFloat(lastPartial.hmr);
+  if(isNaN(lpHmr)) return { reason: 'Last partial fill has no HMR/KM' };
+  const curHmr = parseFloat(entry.hmr);
+  if(isNaN(curHmr)) return { reason: 'This entry has no HMR/KM' };
+  const delta = curHmr - lpHmr;
+  if(delta <= 0) return { reason: `HMR/KM did not increase (Δ ${delta})` };
   const value = isMachine ? consumed/delta : delta/consumed;
   return { value, formatted: value.toFixed(2)+' '+unit, unit, consumed, delta };
 }
  
-// Difference between Manual (stock-derived) and GPS (admin-entered) consumption.
-// Returns { delta, pct, severity } or null when either side is missing.
+// F2F (FULL-TO-FULL) CONSUMPTION — sum of fills between two Full events.
+//   consumed = sum(fills strictly after last_full, up to AND including current)
+//   Only computable when CURRENT fill is also Full.
+//   Vehicle: km/L = (cur.hmr − last_full.hmr) / consumed
+//   Machine: L/hr = consumed / (cur.hmr − last_full.hmr)
+function calcF2FConsumption(entry){
+  const veh = state.vehicles.find(v => v.id === entry.vehicle_id);
+  if(!veh) return { reason: 'Vehicle not found in master list' };
+  if(entry.fill_type !== 'full') return { reason: 'F2F only computed for Full Tank fills (current is partial)' };
+  const isMachine = veh.type === 'machine';
+  const unit = isMachine ? 'L/hr' : 'km/L';
+  const t = new Date(entry.fill_time || entry.created_at).getTime();
+  const lastFull = state.entries
+    .filter(e => e.vehicle_id === entry.vehicle_id && e.id !== entry.id && e.fill_type === 'full')
+    .filter(e => new Date(e.fill_time || e.created_at).getTime() < t)
+    .sort((a,b) => new Date(b.fill_time||b.created_at) - new Date(a.fill_time||a.created_at))[0];
+  if(!lastFull) return { reason: 'No previous Full Tank fill of this vehicle' };
+  const lfT = new Date(lastFull.fill_time||lastFull.created_at).getTime();
+  // All fills (full or partial) strictly after last_full, up to AND including current
+  const consumed = state.entries
+    .filter(e => e.vehicle_id === entry.vehicle_id)
+    .filter(e => {
+      const et = new Date(e.fill_time||e.created_at).getTime();
+      return et > lfT && et <= t;
+    })
+    .reduce((s,e) => s + (parseFloat(e.quantity)||0), 0);
+  if(consumed <= 0) return { reason: 'Zero fuel logged between Full fills' };
+  const lfHmr = parseFloat(lastFull.hmr);
+  if(isNaN(lfHmr)) return { reason: 'Last Full fill has no HMR/KM' };
+  const curHmr = parseFloat(entry.hmr);
+  if(isNaN(curHmr)) return { reason: 'This entry has no HMR/KM' };
+  const delta = curHmr - lfHmr;
+  if(delta <= 0) return { reason: `HMR/KM did not increase (Δ ${delta})` };
+  const value = isMachine ? consumed/delta : delta/consumed;
+  return { value, formatted: value.toFixed(2)+' '+unit, unit, consumed, delta };
+}
+ 
+// Δ (Manual − GPS). Prefers F2F when available (more accurate), falls back to Partial.
 function calcConsDiff(entry){
-  const manual = calcManualConsumption(entry);
+  const f2f = calcF2FConsumption(entry);
+  const partial = calcPartialConsumption(entry);
   const gps = (entry.consumption != null && entry.consumption !== '' && !isNaN(+entry.consumption))
     ? +entry.consumption : null;
-  if(!manual || manual.value === undefined || gps == null) return null;
+  if(gps == null) return null;
+  const manual = (f2f && f2f.value !== undefined) ? f2f
+               : (partial && partial.value !== undefined) ? partial : null;
+  if(!manual) return null;
   const delta = manual.value - gps;
   const pct = gps !== 0 ? (delta / gps) * 100 : 0;
   const absPct = Math.abs(pct);
   const severity = absPct < 10 ? 'ok' : (absPct < 20 ? 'warn' : 'bad');
-  return { delta, pct, severity, manualVal: manual.value, gpsVal: gps, unit: manual.unit };
+  const basedOn = (f2f && f2f.value !== undefined) ? 'F2F' : 'Partial';
+  return { delta, pct, severity, manualVal: manual.value, gpsVal: gps, unit: manual.unit, basedOn };
+}
+ 
+// Back-compat alias (some older code paths may still call calcManualConsumption)
+function calcManualConsumption(entry){
+  const f = calcF2FConsumption(entry);
+  if(f && f.value !== undefined) return f;
+  return calcPartialConsumption(entry);
 }
  
 // Persist + apply the avg-mode toggle
@@ -1726,10 +1767,19 @@ function renderEntriesTable(entries, opts={}){
   try { viewMode = localStorage.getItem('tasr_view_mode') || 'table'; } catch(e) {}
  
   const sort = state.entrySort || { col:'time', dir:'desc' };
-  const sortLabel = ({
-    time:'Time', manager:'Manager', vehicle:'Vehicle', hmr:'HMR', qty:'Qty',
-    stock:'Veh Stock', avg:'Avg', manual:'Manual', gps:'GPS', source:'Source'
-  })[sort.col] || sort.col;
+  const sortOpts = [
+    {k:'time',    l:'Time'},
+    {k:'vehicle', l:'Vehicle'},
+    {k:'manager', l:'Manager'},
+    {k:'hmr',     l:'HMR'},
+    {k:'qty',     l:'Qty'},
+    {k:'stock',   l:'Veh Stock'},
+    {k:'avg',     l:'Avg'},
+    {k:'partial', l:'Partial Cons'},
+    {k:'f2f',     l:'F2F Cons'},
+    {k:'gps',     l:'GPS Cons'},
+    {k:'source',  l:'Source'},
+  ];
   const sortNonDefault = !(sort.col === 'time' && sort.dir === 'desc');
  
   const toolbar = entries.length ? `
@@ -1738,10 +1788,16 @@ function renderEntriesTable(entries, opts={}){
         <button class="vt ${viewMode==='table'?'active':''}" onclick="setViewMode('table')">📊 Table</button>
         <button class="vt ${viewMode==='cards'?'active':''}" onclick="setViewMode('cards')">🎴 Cards</button>
       </div>
-      <div style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-        <b style="color:var(--text)">${entries.length}</b> entries
-        · sorted by <b style="color:var(--accent-dark)">${sortLabel}</b> ${sort.dir === 'asc' ? '▲' : '▼'}
+      <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-muted)">
+        <span>Sort:</span>
+        <select onchange="sortByDropdown(this.value)" style="padding:4px 6px;border:1px solid var(--border);border-radius:5px;font-size:12px;background:#fff">
+          ${sortOpts.map(o => `<option value="${o.k}" ${sort.col===o.k?'selected':''}>${o.l}</option>`).join('')}
+        </select>
+        <button class="btn xs ghost" style="padding:3px 8px" onclick="sortToggleDir()" title="Toggle direction">${sort.dir === 'asc' ? '▲ Asc' : '▼ Desc'}</button>
         ${sortNonDefault ? `<button class="btn xs ghost" onclick="resetEntrySort()">Reset</button>` : ''}
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-left:auto">
+        <b style="color:var(--text)">${entries.length}</b> ${entries.length === 1 ? 'entry' : 'entries'}
       </div>
     </div>` : '';
  
@@ -1749,6 +1805,18 @@ function renderEntriesTable(entries, opts={}){
   if(viewMode === 'cards') return toolbar + renderEntriesCardsView(entries, opts);
   return toolbar + renderEntriesTableView(entries, opts);
 }
+ 
+window.sortByDropdown = function(col){
+  if(!state.entrySort) state.entrySort = { col:'time', dir:'desc' };
+  state.entrySort.col = col;
+  renderDash();
+};
+ 
+window.sortToggleDir = function(){
+  if(!state.entrySort) state.entrySort = { col:'time', dir:'desc' };
+  state.entrySort.dir = state.entrySort.dir === 'asc' ? 'desc' : 'asc';
+  renderDash();
+};
  
 window.resetEntrySort = function(){
   state.entrySort = { col:'time', dir:'desc' };
@@ -1777,7 +1845,8 @@ function sortEntries(list){
       case 'qty':     return parseFloat(e.quantity)||0;
       case 'stock':   return parseFloat(e.stock)||0;
       case 'avg':     { const a = calcAvg(e); return a ? a.value : -Infinity; }
-      case 'manual':  { const m = calcManualConsumption(e); return (m && m.value !== undefined) ? m.value : -Infinity; }
+      case 'partial': { const m = calcPartialConsumption(e); return (m && m.value !== undefined) ? m.value : -Infinity; }
+      case 'f2f':     { const m = calcF2FConsumption(e); return (m && m.value !== undefined) ? m.value : -Infinity; }
       case 'gps':     return (e.consumption != null && e.consumption !== '' && !isNaN(+e.consumption)) ? +e.consumption : -Infinity;
       case 'source':  return (e.source||'').toLowerCase();
       default:        return 0;
@@ -1798,7 +1867,7 @@ window.sortBy = function(col){
     state.entrySort.dir = state.entrySort.dir === 'asc' ? 'desc' : 'asc';
   } else {
     state.entrySort.col = col;
-    state.entrySort.dir = (col === 'time' || col === 'qty' || col === 'avg' || col === 'manual' || col === 'gps' || col === 'hmr' || col === 'stock') ? 'desc' : 'asc';
+    state.entrySort.dir = (['time','qty','avg','partial','f2f','gps','hmr','stock'].includes(col)) ? 'desc' : 'asc';
   }
   renderDash();
 };
@@ -1830,10 +1899,17 @@ function buildEntryDisplay(e){
   const avgCell = avg
     ? `<b style="color:${avg.meaningful?'var(--success)':'var(--text-muted)'}">${avg.formatted}</b>${avg.meaningful?'':' <span style="font-size:10px;color:var(--text-soft)">~</span>'}`
     : '—';
-  const manual = calcManualConsumption(e);
-  const manualCell = (manual && manual.value !== undefined)
-    ? `<b>${manual.value.toFixed(2)}</b> <span style="font-size:10px;color:var(--text-soft)">${unit}</span>`
-    : `<span style="color:var(--text-soft);cursor:help;border-bottom:1px dotted var(--text-soft)" title="${escapeHtml(manual && manual.reason ? manual.reason : 'Cannot compute')}">—</span>`;
+  // Partial Consumption — auto-calc from stock between last Partial fill and current
+  const partial = calcPartialConsumption(e);
+  const partialCell = (partial && partial.value !== undefined)
+    ? `<b>${partial.value.toFixed(2)}</b> <span style="font-size:10px;color:var(--text-soft)">${unit}</span>`
+    : `<span style="color:var(--text-soft);cursor:help;border-bottom:1px dotted var(--text-soft)" title="${escapeHtml(partial && partial.reason ? partial.reason : 'Cannot compute')}">—</span>`;
+  // F2F Consumption — sum of fills between Full events
+  const f2f = calcF2FConsumption(e);
+  const f2fCell = (f2f && f2f.value !== undefined)
+    ? `<b style="color:var(--accent-dark)">${f2f.value.toFixed(2)}</b> <span style="font-size:10px;color:var(--text-soft)">${unit}</span>`
+    : `<span style="color:var(--text-soft);cursor:help;border-bottom:1px dotted var(--text-soft)" title="${escapeHtml(f2f && f2f.reason ? f2f.reason : 'Cannot compute')}">—</span>`;
+  // GPS Consumption — admin-entered; owner can quick-add/edit, managers see read-only
   let gpsCell;
   if(e.consumption != null && e.consumption !== '' && !isNaN(+e.consumption)){
     const cv = (+e.consumption).toFixed(2);
@@ -1845,30 +1921,24 @@ function buildEntryDisplay(e){
       ? `<button class="btn xs ghost" style="font-size:11px;padding:2px 8px" onclick="setConsumptionModal('${e.id}')">+ Add</button>`
       : '<span style="color:var(--text-soft)">—</span>';
   }
+  // Δ — uses F2F when available, else Partial, against GPS
   const diff = calcConsDiff(e);
   let diffCell = '<span style="color:var(--text-soft)">—</span>';
   if(diff){
     const color = diff.severity === 'ok' ? 'var(--success)'
                 : diff.severity === 'warn' ? '#a16207' : 'var(--danger)';
     const sign = diff.delta > 0 ? '+' : '';
-    diffCell = `<b style="color:${color}">${sign}${diff.delta.toFixed(2)}</b><br><span style="font-size:10px;color:var(--text-soft)">${sign}${diff.pct.toFixed(1)}%</span>`;
+    diffCell = `<b style="color:${color}" title="Based on ${diff.basedOn} cons.">${sign}${diff.delta.toFixed(2)}</b><br><span style="font-size:10px;color:var(--text-soft)">${sign}${diff.pct.toFixed(1)}%</span>`;
   }
-  return { veh, vehDisplay, unit, src, editBadge, fillBadge, avgCell, manualCell, gpsCell, diffCell };
+  return { veh, vehDisplay, unit, src, editBadge, fillBadge, avgCell, partialCell, f2fCell, gpsCell, diffCell };
 }
  
-// Table view — sticky-LEFT columns (Time/Manager/Vehicle frozen on horizontal scroll).
-// Click any header to sort by that column. Vertical scroll is page-level so admin
-// sees ALL entries by scrolling the page — no internal scroll box.
+// Table view — only Vehicle (1st col) is frozen on horizontal scroll.
+// Click any header to sort. Vertical scroll is page-level so admin sees ALL entries.
 function renderEntriesTableView(entries, opts={}){
   const showMgr = opts.showManager !== false;
   const canEdit = opts.canEdit;
   const sorted = sortEntries(entries);
- 
-  // Freeze classes: Time = sticky-1 ALWAYS,
-  // Manager = sticky-2 (if shown), Vehicle = sticky-3 OR sticky-2-last
-  const stickyT = 'sticky-1';
-  const stickyM = 'sticky-2';
-  const stickyV = showMgr ? 'sticky-3' : 'sticky-2-last';
  
   const rows = sorted.map(e => {
     const d = buildEntryDisplay(e);
@@ -1877,15 +1947,16 @@ function renderEntriesTableView(entries, opts={}){
       return `<td>${escapeHtml(v||'')}</td>`;
     }).join('');
     return `<tr>
-      <td class="${stickyT}">${fmtDT(e.fill_time||e.created_at)}</td>
-      ${showMgr?`<td class="${stickyM}">${escapeHtml(e.manager_name||'—')}</td>`:''}
-      <td class="${stickyV}"><b>${escapeHtml(d.vehDisplay)}</b></td>
+      <td class="sticky-1"><b>${escapeHtml(d.vehDisplay)}</b></td>
+      <td>${fmtDT(e.fill_time||e.created_at)}</td>
+      ${showMgr?`<td>${escapeHtml(e.manager_name||'—')}</td>`:''}
       <td>${e.hmr??'—'}</td>
       <td><b>${(+e.quantity||0).toFixed(1)}</b> L</td>
       <td>${d.fillBadge}</td>
       <td>${e.stock!=null && e.stock!=='' ? (+e.stock).toFixed(1) : '—'}</td>
       <td>${d.avgCell}</td>
-      <td>${d.manualCell}</td>
+      <td>${d.partialCell}</td>
+      <td>${d.f2fCell}</td>
       <td>${d.gpsCell}</td>
       <td>${d.diffCell}</td>
       <td>${escapeHtml(d.src)}</td>
@@ -1896,7 +1967,22 @@ function renderEntriesTableView(entries, opts={}){
   }).join('');
   return `<div class="table-wrap sticky-table"><table>
     <thead><tr>
-      <th class="${stickyT} ${sortedClass('time')}" onclick="sortBy('time')">Time ${sortArrow('time')}</th>${showMgr?`<th class="${stickyM} ${sortedClass('manager')}" onclick="sortBy('manager')">Manager ${sortArrow('manager')}</th>`:''}<th class="${stickyV} ${sortedClass('vehicle')}" onclick="sortBy('vehicle')">Vehicle ${sortArrow('vehicle')}</th><th class="${sortedClass('hmr')}" onclick="sortBy('hmr')">HMR ${sortArrow('hmr')}</th><th class="${sortedClass('qty')}" onclick="sortBy('qty')">Qty ${sortArrow('qty')}</th><th>Fill</th><th class="${sortedClass('stock')}" onclick="sortBy('stock')" title="Vehicle dipstick reading (Angul Naap)">Veh Stock ${sortArrow('stock')}</th><th class="${sortedClass('avg')}" onclick="sortBy('avg')">Avg ${state.avgMode==='full2full'?'(F2F)':'(Trip)'} ${sortArrow('avg')}</th><th class="${sortedClass('manual')}" onclick="sortBy('manual')" title="Auto-calculated from stock readings">Manual Cons. ${sortArrow('manual')}</th><th class="${sortedClass('gps')}" onclick="sortBy('gps')" title="Admin-entered consumption (from GPS / telematics)">GPS Cons. ${sortArrow('gps')}</th><th title="Manual − GPS difference">Δ</th><th class="${sortedClass('source')}" onclick="sortBy('source')">Source ${sortArrow('source')}</th>${state.customFields.map(f=>`<th>${escapeHtml(f.field_label)}</th>`).join('')}<th></th>${canEdit?'<th></th>':''}
+      <th class="sticky-1 ${sortedClass('vehicle')}" onclick="sortBy('vehicle')">Vehicle ${sortArrow('vehicle')}</th>
+      <th class="${sortedClass('time')}" onclick="sortBy('time')">Time ${sortArrow('time')}</th>
+      ${showMgr?`<th class="${sortedClass('manager')}" onclick="sortBy('manager')">Manager ${sortArrow('manager')}</th>`:''}
+      <th class="${sortedClass('hmr')}" onclick="sortBy('hmr')">HMR ${sortArrow('hmr')}</th>
+      <th class="${sortedClass('qty')}" onclick="sortBy('qty')">Qty ${sortArrow('qty')}</th>
+      <th>Fill</th>
+      <th class="${sortedClass('stock')}" onclick="sortBy('stock')" title="Vehicle dipstick reading (Angul Naap)">Veh Stock ${sortArrow('stock')}</th>
+      <th class="${sortedClass('avg')}" onclick="sortBy('avg')">Avg ${state.avgMode==='full2full'?'(F2F)':'(Trip)'} ${sortArrow('avg')}</th>
+      <th class="${sortedClass('partial')}" onclick="sortBy('partial')" title="Partial consumption — between last Not-Full fill and current">Partial Cons. ${sortArrow('partial')}</th>
+      <th class="${sortedClass('f2f')}" onclick="sortBy('f2f')" title="Full-to-Full consumption — sum of fills between Full events">F2F Cons. ${sortArrow('f2f')}</th>
+      <th class="${sortedClass('gps')}" onclick="sortBy('gps')" title="Admin-entered consumption (from GPS / telematics)">GPS Cons. ${sortArrow('gps')}</th>
+      <th title="Manual − GPS difference (uses F2F when available, else Partial)">Δ</th>
+      <th class="${sortedClass('source')}" onclick="sortBy('source')">Source ${sortArrow('source')}</th>
+      ${state.customFields.map(f=>`<th>${escapeHtml(f.field_label)}</th>`).join('')}
+      <th></th>
+      ${canEdit?'<th></th>':''}
     </tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
@@ -1928,7 +2014,8 @@ function renderEntriesCardsView(entries, opts={}){
           <div class="lbl">Quantity</div><div class="val"><b>${(+e.quantity||0).toFixed(1)}</b> L</div>
           <div class="lbl">Veh Stock</div><div class="val">${e.stock!=null && e.stock!=='' ? (+e.stock).toFixed(1)+' L' : '—'}</div>
           <div class="lbl">Avg ${state.avgMode==='full2full'?'(F2F)':'(Trip)'}</div><div class="val">${d.avgCell}</div>
-          <div class="lbl">Manual Cons</div><div class="val">${d.manualCell}</div>
+          <div class="lbl">Partial Cons</div><div class="val">${d.partialCell}</div>
+          <div class="lbl">F2F Cons</div><div class="val">${d.f2fCell}</div>
           <div class="lbl">GPS Cons</div><div class="val">${d.gpsCell}</div>
           <div class="lbl">Δ Manual − GPS</div><div class="val">${d.diffCell}</div>
           ${customRows}
@@ -1965,6 +2052,13 @@ function renderAllEntries(page){
         </div>
       </div>
       <div class="form-row" style="margin-bottom:10px">
+        <label>Vehicle / Machine</label>
+        <select id="filter-vehicle" style="width:100%">
+          <option value="">All vehicles</option>
+          ${state.vehicles.map(v => `<option value="${v.id}">${escapeHtml(v.reg_no || v.name)}${v.branch?' · '+escapeHtml(v.branch):''}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-row" style="margin-bottom:10px">
         <input type="text" id="filter-search" placeholder="Search by reg no, vehicle, manager, source…" style="width:100%;padding:8px 10px;border:1px solid var(--border-dark);border-radius:var(--radius-sm);font-size:13px">
       </div>
       <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
@@ -1981,6 +2075,7 @@ function renderAllEntries(page){
   window._refilterAllEntries = function(){
     const q = $('#filter-search').value.trim().toLowerCase();
     const mid = $('#filter-mgr').value;
+    const vid = $('#filter-vehicle').value;
     const fromV = $('#filter-from').value;
     const toV = $('#filter-to').value;
     const fromTs = fromV ? new Date(fromV+'T00:00:00').getTime() : 0;
@@ -1989,6 +2084,7 @@ function renderAllEntries(page){
       const t = new Date(e.fill_time||e.created_at).getTime();
       if(t < fromTs || t > toTs) return false;
       if(mid && String(e.manager_id) !== String(mid)) return false;
+      if(vid && e.vehicle_id !== vid) return false;
       if(q){
         const veh = state.vehicles.find(v=>v.id===e.vehicle_id);
         const s = (veh?(veh.reg_no||'')+' '+(veh.name||''):'') + ' ' + (e.manager_name||'') + ' ' + (e.source_custom||'') + ' ' + (e.vehicle_name||'');
@@ -1998,10 +2094,10 @@ function renderAllEntries(page){
     });
     const total = list.reduce((s,e)=>s+(+e.quantity||0), 0);
     $('#filter-count').textContent = list.length + ' entries · ' + total.toFixed(1) + ' L total';
-    $('#entries-table').innerHTML = renderEntriesTable(list, {showManager:true});
+    $('#entries-table').innerHTML = renderEntriesTable(list, {showManager:true, canEdit:true});
   };
  
-  ['filter-search','filter-mgr','filter-from','filter-to'].forEach(id=>{
+  ['filter-search','filter-mgr','filter-vehicle','filter-from','filter-to'].forEach(id=>{
     const el = $('#'+id); if(!el) return;
     el.addEventListener(id==='filter-search'?'input':'change', window._refilterAllEntries);
   });
@@ -2478,7 +2574,8 @@ window.doExport = function(){
       'Vehicle Stock (Angul Naap)': e.stock != null && e.stock !== '' ? +e.stock : '',
       'Trip Avg': (function(){ const a = calcAvg(e,'trip'); return a ? a.formatted : ''; })(),
       'Full-to-Full Avg': (function(){ const a = calcAvg(e,'full2full'); return a ? a.formatted : ''; })(),
-      'Manual Consumption (auto)': (function(){ const m = calcManualConsumption(e); return (m && m.value !== undefined) ? +m.value.toFixed(3) : ''; })(),
+      'Partial Consumption (auto)': (function(){ const m = calcPartialConsumption(e); return (m && m.value !== undefined) ? +m.value.toFixed(3) : ''; })(),
+      'F2F Consumption (auto)':     (function(){ const m = calcF2FConsumption(e); return (m && m.value !== undefined) ? +m.value.toFixed(3) : ''; })(),
       'GPS Consumption (Admin)': (e.consumption != null && e.consumption !== '' && !isNaN(+e.consumption)) ? (+e.consumption) : '',
       'Δ Manual − GPS': (function(){ const d = calcConsDiff(e); return d ? +d.delta.toFixed(3) : ''; })(),
       'Δ %': (function(){ const d = calcConsDiff(e); return d ? +d.pct.toFixed(2) : ''; })(),
@@ -2597,7 +2694,7 @@ function renderSettings(page){
       <div style="font-size:11px;color:var(--text-muted);margin-top:8px">
         💡 Wipe button erases local data on this device only — server data is safe.
       </div>
-      <div style="font-size:10px;color:var(--text-soft);margin-top:14px;text-align:right">v2.5</div>
+      <div style="font-size:10px;color:var(--text-soft);margin-top:14px;text-align:right">v2.6</div>
     </div>
   `;
   $('#set-calc').addEventListener('change', e=>{
@@ -2650,6 +2747,9 @@ function renderNewEntry(page){
         <div class="hint">${activeVehicles.length} vehicle${activeVehicles.length===1?'':'s'} available</div>
       </div>
  
+      <!-- Reference card showing the last fill of the selected vehicle, of the selected fill-type -->
+      <div id="ne-last-fill-ref" style="display:none"></div>
+ 
       <div class="grid grid-2">
         <div class="form-row"><label>HMR / KM Reading *</label><input type="number" step="0.1" id="ne-hmr" placeholder="e.g. 4521.5"></div>
         <div class="form-row"><label>Quantity (Litres) *</label><input type="number" step="0.1" id="ne-qty" placeholder="e.g. 45.0"></div>
@@ -2699,17 +2799,70 @@ function renderNewEntry(page){
   wireVehicleSearch('ne-vehicle', 'ne-vehicle-id', 'ne-vehicle-results',
     () => state.vehicles.filter(v=>v.active!==false), null);
  
+  // Helper: render reference card for last fill of selected vehicle + fill type
+  function updateLastFillRef(){
+    const vehId = ($('#ne-vehicle-id')||{}).value || '';
+    const fillType = (document.querySelector('#ne-fill-pills .source-pill.active')||{}).dataset?.fill || 'full';
+    const refEl = $('#ne-last-fill-ref');
+    if(!refEl) return;
+    if(!vehId){ refEl.style.display='none'; refEl.innerHTML=''; return; }
+    const veh = state.vehicles.find(v=>v.id===vehId);
+    const vehName = veh ? (veh.reg_no || veh.name) : '—';
+    const matches = state.entries
+      .filter(e => e.vehicle_id === vehId && e.fill_type === fillType)
+      .sort((a,b) => new Date(b.fill_time||b.created_at) - new Date(a.fill_time||a.created_at));
+    refEl.style.display = 'block';
+    const typeLabel = fillType === 'full' ? 'Full Tank' : 'Not Full';
+    if(matches.length === 0){
+      refEl.innerHTML = `
+        <div class="ref-card empty">
+          <div class="ref-card-title">No previous ${typeLabel} fill for ${escapeHtml(vehName)}</div>
+          <div class="ref-card-meta">This will be the first ${typeLabel} entry for this vehicle</div>
+        </div>`;
+      return;
+    }
+    const last = matches[0];
+    refEl.innerHTML = `
+      <div class="ref-card">
+        <div class="ref-card-title">📋 Last ${typeLabel} fill — ${escapeHtml(vehName)}</div>
+        <div class="ref-card-meta">${fmtDT(last.fill_time||last.created_at)} · by <b>${escapeHtml(last.manager_name||'—')}</b></div>
+        <div class="ref-card-data">
+          <span><span class="lbl">HMR</span> <b>${last.hmr??'—'}</b></span>
+          <span><span class="lbl">Veh Stock</span> <b>${last.stock!=null && last.stock!=='' ? (+last.stock).toFixed(1)+' L' : '—'}</b></span>
+          <span><span class="lbl">Filled</span> <b>${(+last.quantity||0).toFixed(1)} L</b></span>
+        </div>
+      </div>`;
+  }
+ 
   // source pill toggle
   page.querySelectorAll('.source-pills .source-pill[data-src]').forEach(p=>p.addEventListener('click', ()=>{
     page.querySelectorAll('.source-pills .source-pill[data-src]').forEach(x=>x.classList.remove('active'));
     p.classList.add('active');
     $('#ne-src-custom').style.display = p.dataset.src==='other' ? '' : 'none';
   }));
-  // fill-type pill toggle
+  // fill-type pill toggle (also refreshes the reference card)
   page.querySelectorAll('#ne-fill-pills .source-pill').forEach(p=>p.addEventListener('click', ()=>{
     page.querySelectorAll('#ne-fill-pills .source-pill').forEach(x=>x.classList.remove('active'));
     p.classList.add('active');
+    updateLastFillRef();
   }));
+ 
+  // Watch vehicle hidden field for changes (wireVehicleSearch updates it on selection)
+  const vehHidden = $('#ne-vehicle-id');
+  if(vehHidden){
+    // MutationObserver on the value (input event doesn't fire on hidden fields set by script)
+    const obs = new MutationObserver(updateLastFillRef);
+    obs.observe(vehHidden, { attributes: true, attributeFilter: ['value'] });
+    // Also poll because the search dropdown sets `.value` directly (not as an attribute)
+    let lastVehId = '';
+    setInterval(() => {
+      if(!document.body.contains(vehHidden)) return; // form gone
+      if(vehHidden.value !== lastVehId){
+        lastVehId = vehHidden.value;
+        updateLastFillRef();
+      }
+    }, 400);
+  }
 }
  
 // Reusable searchable vehicle picker — `vehiclesOrGetter` may be an array OR a
@@ -2841,6 +2994,13 @@ function renderMyEntries(page){
   const todayLiters = mine.filter(e=>new Date(e.fill_time||e.created_at).getTime() >= today.getTime()).reduce((s,e)=>s+(+e.quantity||0),0);
   const totalLiters = mine.reduce((s,e)=>s+(+e.quantity||0),0);
  
+  // Build vehicle filter dropdown from vehicles the manager has actually fueled (more useful than full list)
+  const usedVehIds = [...new Set(mine.map(e => e.vehicle_id).filter(Boolean))];
+  const usedVehicles = usedVehIds
+    .map(id => state.vehicles.find(v => v.id === id))
+    .filter(Boolean)
+    .sort((a,b) => (a.reg_no||a.name||'').localeCompare(b.reg_no||b.name||''));
+ 
   page.innerHTML = `
     <div class="grid grid-3">
       <div class="kpi"><div class="lbl">Today</div><div class="val">${todayCount}</div><div class="sub">${todayLiters.toFixed(1)} L</div></div>
@@ -2857,12 +3017,69 @@ function renderMyEntries(page){
     </div>
  
     <div class="section" style="margin-top:14px">
-      <div class="section-h"><h3>My Entries</h3><span class="sub">Tap edit to revise</span></div>
+      <div class="section-h"><h3>My Entries</h3><span class="sub" id="me-count"></span></div>
+      <div class="grid grid-3" style="margin-bottom:10px">
+        <div class="form-row" style="margin:0">
+          <label>From date</label>
+          <input type="date" id="me-from">
+        </div>
+        <div class="form-row" style="margin:0">
+          <label>To date</label>
+          <input type="date" id="me-to">
+        </div>
+        <div class="form-row" style="margin:0">
+          <label>Vehicle</label>
+          <select id="me-veh">
+            <option value="">All vehicles</option>
+            ${usedVehicles.map(v=>`<option value="${v.id}">${escapeHtml(v.reg_no || v.name)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
+        <button class="btn small ghost" onclick="setMyEntriesPreset('today')">Today</button>
+        <button class="btn small ghost" onclick="setMyEntriesPreset('week')">Last 7 days</button>
+        <button class="btn small ghost" onclick="setMyEntriesPreset('month')">Last 30 days</button>
+        <button class="btn small ghost" onclick="setMyEntriesPreset('clear')">Clear</button>
+      </div>
       ${avgModeToggleHtml()}
-      ${renderEntriesTable(mine, {showManager:false, canEdit:true})}
+      <div id="me-table">${renderEntriesTable(mine, {showManager:false, canEdit:true})}</div>
     </div>
   `;
+ 
+  window._refilterMyEntries = function(){
+    const vid = $('#me-veh').value;
+    const fromV = $('#me-from').value;
+    const toV = $('#me-to').value;
+    const fromTs = fromV ? new Date(fromV+'T00:00:00').getTime() : 0;
+    const toTs   = toV   ? new Date(toV+'T23:59:59').getTime()   : Number.MAX_SAFE_INTEGER;
+    const filtered = mine.filter(e => {
+      const t = new Date(e.fill_time||e.created_at).getTime();
+      if(t < fromTs || t > toTs) return false;
+      if(vid && e.vehicle_id !== vid) return false;
+      return true;
+    });
+    const total = filtered.reduce((s,e)=>s+(+e.quantity||0), 0);
+    const cnt = $('#me-count'); if(cnt) cnt.textContent = filtered.length + ' entries · ' + total.toFixed(1) + ' L';
+    $('#me-table').innerHTML = renderEntriesTable(filtered, {showManager:false, canEdit:true});
+  };
+  ['me-veh','me-from','me-to'].forEach(id=>{
+    const el = $('#'+id); if(!el) return;
+    el.addEventListener('change', window._refilterMyEntries);
+  });
+  window._refilterMyEntries();
 }
+ 
+window.setMyEntriesPreset = function(p){
+  const fromEl = $('#me-from'), toEl = $('#me-to');
+  if(!fromEl || !toEl) return;
+  const today = new Date();
+  const fmt = d => d.toISOString().slice(0,10);
+  if(p==='today'){ fromEl.value = fmt(today); toEl.value = fmt(today); }
+  else if(p==='week'){ const d = new Date(Date.now()-7*86400000); fromEl.value = fmt(d); toEl.value = fmt(today); }
+  else if(p==='month'){ const d = new Date(Date.now()-30*86400000); fromEl.value = fmt(d); toEl.value = fmt(today); }
+  else if(p==='clear'){ fromEl.value=''; toEl.value=''; }
+  if(window._refilterMyEntries) window._refilterMyEntries();
+};
  
 window.editEntryModal = function(id){
   const e = state.entries.find(x=>x.id===id); if(!e) return;
