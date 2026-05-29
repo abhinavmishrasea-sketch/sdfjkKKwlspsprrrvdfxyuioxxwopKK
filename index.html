@@ -497,6 +497,7 @@ body.lightbg .admin-btn{
 .badge.ok{background:#dcfce7;color:#166534}
 .badge.off{background:#fee2e2;color:#991b1b}
 .badge.warn{background:#fef3c7;color:#92400e}
+.badge.gps{background:#d1fae5;color:#059669;font-weight:700}
  
 /* Serial number in vehicles/machines list — accent color, slight pill */
 .serial-no{
@@ -656,10 +657,10 @@ body.lightbg .admin-btn{
       <button class="calc-btn eq" data-k="=">=</button>
     </div>
   </div>
-  <!-- v4.0 indicator: tiny dot bottom-center. Visible when user taps any button (briefly). -->
+  <!-- v4.1 indicator: tiny dot bottom-center. Visible when user taps any button (briefly). -->
   <div style="position:absolute;bottom:6px;left:0;right:0;text-align:center;pointer-events:none;font-size:9px;color:#555;letter-spacing:1px">
     <span id="calc-debug" style="display:inline-block;min-width:8px;color:#888"></span>
-    <span style="opacity:.35;margin-left:6px">v4.0</span>
+    <span style="opacity:.35;margin-left:6px">v4.1</span>
   </div>
 </div>
  
@@ -701,7 +702,7 @@ body.lightbg .admin-btn{
 <!-- ==================== DASHBOARD SCREEN ==================== -->
 <div id="dash-screen" class="screen">
   <div class="topbar">
-    <div class="brand">TASR <span class="accent">BharatNext</span> <span style="font-size:10px;color:var(--text-soft);font-weight:500">v4.0</span></div>
+    <div class="brand">TASR <span class="accent">BharatNext</span> <span style="font-size:10px;color:var(--text-soft);font-weight:500">v4.1</span></div>
     <span id="sync-pill" class="sync-pill sync-online"><span class="dot"></span><span id="sync-text">Online</span></span>
     <div class="topbar-spacer"></div>
     <div class="who"><b id="who-name">—</b><span id="who-role">—</span></div>
@@ -1021,7 +1022,7 @@ function handleCalcInput(e){
     handleCalcInput(e);
   }, evt === 'touchstart' ? { passive: true } : false);
 });
-console.log('[TASR Fuel v4.0] Calc input handlers attached at document level (click + pointerup + touchstart)');
+console.log('[TASR Fuel v4.1] Calc input handlers attached at document level (click + pointerup + touchstart)');
  
 // keyboard support
 document.addEventListener('keydown', e=>{
@@ -2319,8 +2320,12 @@ function renderAllEntries(page){
         </div>
  
         <div class="form-row" style="margin-bottom:0">
-          <label>Free text search</label>
-          <input type="text" id="filter-search" placeholder="Reg no, manager name, source…">
+          <label>Show</label>
+          <select id="filter-gps">
+            <option value="all">All vehicles &amp; machines</option>
+            <option value="gps">GPS enabled only</option>
+            <option value="nogps">Non-GPS only</option>
+          </select>
         </div>
       </div>
  
@@ -2330,7 +2335,7 @@ function renderAllEntries(page){
   `;
  
   window._refilterAllEntries = function(){
-    const q = $('#filter-search').value.trim().toLowerCase();
+    const gpsMode = ($('#filter-gps')||{}).value || 'all';
     const mid = $('#filter-mgr').value;
     const vid = $('#filter-vehicle').value;
     const fromV = $('#filter-from').value;
@@ -2342,10 +2347,11 @@ function renderAllEntries(page){
       if(t < fromTs || t > toTs) return false;
       if(mid && String(e.manager_id) !== String(mid)) return false;
       if(vid && e.vehicle_id !== vid) return false;
-      if(q){
+      if(gpsMode !== 'all'){
         const veh = state.vehicles.find(v=>v.id===e.vehicle_id);
-        const s = (veh?(veh.reg_no||'')+' '+(veh.name||''):'') + ' ' + (e.manager_name||'') + ' ' + (e.source_custom||'') + ' ' + (e.vehicle_name||'');
-        if(!s.toLowerCase().includes(q)) return false;
+        const isGps = !!(veh && veh.gps_enabled);
+        if(gpsMode === 'gps' && !isGps) return false;
+        if(gpsMode === 'nogps' && isGps) return false;
       }
       return true;
     });
@@ -2371,7 +2377,7 @@ function renderAllEntries(page){
   const fvText = $('#filter-vehicle-text');
   if(fvText) fvText.addEventListener('input', () => { if(!fvText.value.trim()) $('#filter-vehicle').value=''; });
  
-  ['filter-search','filter-mgr','filter-from','filter-to'].forEach(id=>{
+  ['filter-gps','filter-mgr','filter-from','filter-to'].forEach(id=>{
     const el = $('#'+id); if(!el) return;
     el.addEventListener(id==='filter-search'?'input':'change', window._refilterAllEntries);
   });
@@ -2602,6 +2608,7 @@ function renderVehicles(page){
         <th style="width:50px">S.No</th>
         <th>Reg No</th>
         <th>Type</th>
+        <th>GPS</th>
         <th>Name</th>
         <th>Branch</th>
         <th>Status</th>
@@ -2610,8 +2617,9 @@ function renderVehicles(page){
       <tbody>${list.map((v, idx)=>`
         <tr>
           <td><span class="serial-no">${idx+1}</span></td>
-          <td><b>${escapeHtml(v.reg_no||'—')}</b></td>
+          <td><b style="${v.gps_enabled?'color:#059669':''}">${escapeHtml(v.reg_no||'—')}</b></td>
           <td><span class="badge ${v.type==='machine'?'warn':'info'}">${v.type||'vehicle'}</span></td>
+          <td>${v.gps_enabled?'<span class="badge gps"><i class="ti ti-satellite" style="font-size:11px;vertical-align:-1px"></i> GPS</span>':'<span style="color:var(--text-soft);font-size:11px">—</span>'}</td>
           <td>${escapeHtml(v.name && v.name!==v.reg_no ? v.name : '—')}</td>
           <td>${escapeHtml(v.branch||'—')}</td>
           <td>${v.active===false?'<span class="badge off">Inactive</span>':'<span class="badge ok">Active</span>'}</td>
@@ -2650,6 +2658,13 @@ window.addVehicleModal = function(){
     </div>
     <div class="form-row"><label>Name / Nickname <span style="color:var(--text-soft);text-transform:none;font-weight:400">(optional)</span></label><input id="vh-name" placeholder="e.g. Tipper Red, Big JCB"></div>
     <div class="form-row"><label>Branch</label><input id="vh-branch" placeholder="SHAHPURA / BANDOL / etc."></div>
+    <div class="form-row" style="background:#ecfeff;border:1px solid #67e8f9;border-radius:var(--radius-sm);padding:10px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13px;color:var(--accent-dark)">
+        <input type="checkbox" id="vh-gps" style="width:auto;margin:0">
+        <i class="ti ti-satellite" style="font-size:16px"></i> GPS / Telematics enabled
+      </label>
+      <div class="hint" style="margin-top:4px">Tick if this vehicle/machine has a GPS device installed</div>
+    </div>
     <button class="btn" style="width:100%" onclick="saveVehicle()">Save</button>
   `);
 };
@@ -2662,6 +2677,7 @@ window.saveVehicle = function(){
     type: $('#vh-type').value,
     reg_no: reg,
     branch: $('#vh-branch').value.trim(),
+    gps_enabled: $('#vh-gps').checked,
     active: true
   });
   closeModal(); renderDash(); toast('Vehicle added','ok');
@@ -2675,7 +2691,14 @@ window.editVehicleModal = function(id){
     </div>
     <div class="form-row"><label>Name / Nickname <span style="color:var(--text-soft);text-transform:none;font-weight:400">(optional)</span></label><input id="vh-name" value="${escapeHtml(v.name===v.reg_no?'':v.name||'')}"></div>
     <div class="form-row"><label>Branch</label><input id="vh-branch" value="${escapeHtml(v.branch||'')}"></div>
-    <div class="form-row"><label><input type="checkbox" id="vh-active" ${v.active!==false?'checked':''}> Active</label></div>
+    <div class="form-row" style="background:#ecfeff;border:1px solid #67e8f9;border-radius:var(--radius-sm);padding:10px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13px;color:var(--accent-dark)">
+        <input type="checkbox" id="vh-gps" ${v.gps_enabled?'checked':''} style="width:auto;margin:0">
+        <i class="ti ti-satellite" style="font-size:16px"></i> GPS / Telematics enabled
+      </label>
+      <div class="hint" style="margin-top:4px">Tick if this vehicle/machine has a GPS device installed</div>
+    </div>
+    <div class="form-row"><label style="text-transform:none;letter-spacing:0"><input type="checkbox" id="vh-active" ${v.active!==false?'checked':''} style="width:auto"> Active</label></div>
     <button class="btn" style="width:100%" onclick="saveEditVehicle('${id}')">Save</button>
   `);
 };
@@ -2686,6 +2709,7 @@ window.saveEditVehicle = function(id){
   updateVehicle(id, {
     name: name || reg, type:$('#vh-type').value,
     reg_no: reg, branch:$('#vh-branch').value.trim(),
+    gps_enabled:$('#vh-gps').checked,
     active:$('#vh-active').checked
   });
   closeModal(); renderDash(); toast('Updated','ok');
@@ -2998,7 +3022,7 @@ function renderSettings(page){
       <div style="font-size:11px;color:var(--text-muted);margin-top:8px">
         💡 Wipe button erases local data on this device only — server data is safe.
       </div>
-      <div style="font-size:10px;color:var(--text-soft);margin-top:14px;text-align:right">v4.0</div>
+      <div style="font-size:10px;color:var(--text-soft);margin-top:14px;text-align:right">v4.1</div>
     </div>
   `;
   $('#set-calc').addEventListener('change', e=>{
